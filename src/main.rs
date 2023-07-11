@@ -4,13 +4,18 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
+use rustic_server::ThreadPool;
+
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:9393").unwrap();
+    let thread_pool = ThreadPool::new(5);
 
     for stream in listener.incoming() {
-        let stream = stream.unwrap();
+        let stream_object = stream.unwrap();
         
-        handle_connection(stream);
+        thread_pool.execute(|| {
+            handle_connection(stream_object);
+        });
     }
 }
 
