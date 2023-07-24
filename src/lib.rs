@@ -4,8 +4,8 @@ use std::{
 };
 
 pub struct ThreadPool {
-    _workers: Vec<Worker>,
-    sender: mpsc::Sender<Job>,
+    workers: Vec<Worker>,
+    sender: Option<mpsc::Sender<Job>>,
 }
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
@@ -28,7 +28,10 @@ impl ThreadPool {
         }
         
         //initialize a ThreadPool instance with this threads object and return
-        ThreadPool { _workers: workers, sender: sender }
+        ThreadPool {
+            workers: workers,
+            sender: Some(sender),
+        }
     }
     
     pub fn execute<F> (&self, f: F)
@@ -36,29 +39,52 @@ impl ThreadPool {
         F: FnOnce() + Send + 'static,
     {
         let job = Box::new(f);
-        self.sender.send(job).unwrap();
+        self.sender.as_ref().unwrap().send(job).unwrap();
     }
 }
 
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        drop(self.sender.take());
+
+        for worker in &mut self.workers {
+            println!("Shutting down worker {}", worker.id);
+
+            if let Some(thread) = worker.worker_thread.take() {
+                thread.join().unwrap();
+            }
+        }
+    }
+}
 
 struct Worker {
-    _id: usize,
-    _worker_thread: thread::JoinHandle<()>,
+    id: usize,
+    worker_thread: Option<thread::JoinHandle<()>>,
 }
 
 impl Worker {
     fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
         let worker_thread: thread::JoinHandle<()> = thread::spawn(move || loop {
-            let job = receiver
+            let message = receiver
                                                         .lock()
-                                                        .expect("Failed to acquire mutex lock")
-                                                        .recv()
-                                                        .unwrap();
-            println!("Worker {id} got a job; executing.");
-
-            job();
+                                                        .unwrap()
+                                                        .recv();
+            
+            match message {
+                Ok(job) => {
+                    println!("Worker {id} got a job; executing");
+                    job();
+                }
+                Err(_) => {
+                    println!("Worker {id} disconnected; shutting down");
+                    break;
+                }
+            }
         });
 
-        Worker { _id: id, _worker_thread: worker_thread }
+        Worker {
+            id: id,
+            worker_thread: Some(worker_thread),
+        }
     }
 }
